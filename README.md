@@ -1,36 +1,44 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 예지보전 대시보드 (Predictive Maintenance Demo)
 
-## Getting Started
+설비 센서(온도·진동) 데이터를 시계열로 수집하고, 이상 징후를 탐지한 뒤 Gemini API로
+현장 엔지니어용 설명과 권장 조치, 예상 절감액을 생성해주는 예지보전 대시보드입니다.
 
-First, run the development server:
+## 기능
+
+- 설비별 온도·진동 시계열 차트 (recharts)
+- rolling z-score 기반 이상 탐지 (`lib/anomaly.ts`)
+- 이상 이벤트에 대한 AI 설명/권장 조치/예상 절감액 생성 (Gemini, 한국어)
+- 설비 상태(정상/주의/위험) 요약 대시보드
+
+## 왜 이 프로젝트를 이렇게 만들었나
+
+이상 탐지 알고리즘을 만들 때 "우리가 주입한 이상을 우리가 만든 알고리즘이 잡아낸다"는
+것만으로는 검증이 안 된다고 판단해서, 다음 과정을 거쳤습니다.
+
+1. **순수 노이즈 오탐률·민감도 스윕**으로 알고리즘을 독립적으로 검증
+2. 검증 과정에서 **윈도우보다 긴 이상은 놓친다는 한계**를 발견 — 세 가지 수정을 시도했지만
+   전부 "이상으로 판정된 값을 학습에서 제외"하는 구조적 피드백 루프 때문에 실패했고,
+   원래 방식을 유지하며 한계를 코드에 문서화했습니다 (`lib/anomaly.ts` 참고)
+3. **실제 산업 데이터**(Azure 예지보전 데이터셋: 설비 100대, 1년치 시간당 센서 데이터,
+   실제 고장 기록 761건)에 알고리즘을 그대로 돌려서 재검증 — 무작위 시점 대비 대조군을
+   두지 않으면 "97% 재현율"처럼 그럴듯하지만 사실은 우연과 다르지 않은 숫자가 나온다는 것을
+   확인했고, 이를 반영해 임계값을 재보정했습니다
+
+지금 임계값(z≥3)은 실제 데이터 기준으로 무작위 대비 유의미한(그러나 여전히 약한) 신호를
+보입니다: 재현율 44.7%(무작위 37.3%), 알림 정밀도 5.0%(무작위 4.17%). 단일 센서 z-score는
+참고 지표일 뿐이며, 확정적인 고장 예측 지표는 아닙니다.
+
+## 시작하기
 
 ```bash
+npm install
+cp .env.example .env   # GEMINI_API_KEY 입력
+npm run seed           # 데모용 설비/센서 데이터 생성
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+http://localhost:3000 에서 확인할 수 있습니다.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## 기술 스택
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Next.js (App Router) · TypeScript · better-sqlite3 · recharts · Gemini API (Google GenAI SDK) · Tailwind CSS
