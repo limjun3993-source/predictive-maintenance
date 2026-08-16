@@ -19,16 +19,57 @@ const STATUS_LABEL: Record<EquipmentSummary["status"], string> = {
   critical: "위험",
 };
 
-const STATUS_STYLE: Record<EquipmentSummary["status"], string> = {
-  normal: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
-  warning: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
-  critical: "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300",
+const STATUS_VAR: Record<EquipmentSummary["status"], string> = {
+  normal: "var(--status-good)",
+  warning: "var(--status-warning)",
+  critical: "var(--status-critical)",
 };
 
-const SEVERITY_STYLE: Record<AnomalyEvent["severity"], string> = {
-  warning: "border-amber-400 text-amber-700 dark:text-amber-300",
-  critical: "border-red-400 text-red-700 dark:text-red-300",
+const STATUS_BG_VAR: Record<EquipmentSummary["status"], string> = {
+  normal: "var(--status-good-bg)",
+  warning: "var(--status-warning-bg)",
+  critical: "var(--status-critical-bg)",
 };
+
+function StatusIcon({ status, size = 14 }: { status: EquipmentSummary["status"]; size?: number }) {
+  const color = STATUS_VAR[status];
+  if (status === "normal") {
+    return (
+      <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <circle cx="8" cy="8" r="6.5" stroke={color} strokeWidth="1.6" />
+        <path d="M5.2 8.2l1.8 1.8 3.8-4" stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+  if (status === "warning") {
+    return (
+      <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path d="M8 2.2l6.2 10.8H1.8L8 2.2z" stroke={color} strokeWidth="1.6" strokeLinejoin="round" />
+        <path d="M8 6.6v3" stroke={color} strokeWidth="1.6" strokeLinecap="round" />
+        <circle cx="8" cy="11.6" r="0.9" fill={color} />
+      </svg>
+    );
+  }
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <circle cx="8" cy="8" r="6.5" stroke={color} strokeWidth="1.6" />
+      <path d="M8 4.8v4" stroke={color} strokeWidth="1.6" strokeLinecap="round" />
+      <circle cx="8" cy="11.2" r="0.9" fill={color} />
+    </svg>
+  );
+}
+
+function StatusBadge({ status }: { status: EquipmentSummary["status"] }) {
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium"
+      style={{ background: STATUS_BG_VAR[status], color: STATUS_VAR[status] }}
+    >
+      <StatusIcon status={status} size={12} />
+      {STATUS_LABEL[status]}
+    </span>
+  );
+}
 
 function formatTime(ts: string) {
   return new Date(ts).toLocaleString("ko-KR", {
@@ -41,6 +82,47 @@ function formatTime(ts: string) {
 
 function formatKrw(value: number) {
   return new Intl.NumberFormat("ko-KR").format(Math.round(value));
+}
+
+interface ChartTooltipPayloadItem {
+  dataKey: string;
+  value: number;
+  color: string;
+}
+
+function ChartTooltip({
+  active,
+  payload,
+  label,
+}: {
+  active?: boolean;
+  payload?: ChartTooltipPayloadItem[];
+  label?: string;
+}) {
+  if (!active || !payload || payload.length === 0) return null;
+  return (
+    <div
+      className="rounded-lg border px-3 py-2 text-xs shadow-sm"
+      style={{
+        background: "var(--surface-1)",
+        borderColor: "var(--border)",
+        color: "var(--text-secondary)",
+      }}
+    >
+      <div className="mb-1.5 font-medium" style={{ color: "var(--text-muted)" }}>
+        {label}
+      </div>
+      {payload.map((item) => (
+        <div key={item.dataKey} className="flex items-center gap-2 py-0.5">
+          <span className="h-0.5 w-3 shrink-0 rounded-full" style={{ background: item.color }} />
+          <span style={{ color: "var(--text-primary)" }} className="font-semibold tabular-nums">
+            {item.value.toFixed(2)}
+          </span>
+          <span>{item.dataKey}</span>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export default function Home() {
@@ -93,15 +175,53 @@ export default function Home() {
     진동: r.vibration,
   }));
 
+  const statusCounts = {
+    normal: equipment.filter((eq) => eq.status === "normal").length,
+    warning: equipment.filter((eq) => eq.status === "warning").length,
+    critical: equipment.filter((eq) => eq.status === "critical").length,
+  };
+
   return (
-    <div className="flex flex-1 flex-col bg-zinc-50 dark:bg-black">
-      <header className="border-b border-zinc-200 px-8 py-6 dark:border-zinc-800">
-        <h1 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-50">
+    <div className="flex flex-1 flex-col" style={{ background: "var(--page-plane)" }}>
+      <header className="border-b px-8 py-6" style={{ borderColor: "var(--border)" }}>
+        <h1 className="text-2xl font-semibold" style={{ color: "var(--text-primary)" }}>
           예지보전 대시보드
         </h1>
-        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+        <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
           설비 센서 이상 징후 탐지 및 AI 기반 조치 권장
         </p>
+
+        <div className="mt-5 flex gap-3">
+          <div
+            className="rounded-lg border px-4 py-3"
+            style={{ borderColor: "var(--border)", background: "var(--surface-1)" }}
+          >
+            <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+              전체 설비
+            </p>
+            <p className="mt-0.5 text-xl font-semibold tabular-nums" style={{ color: "var(--text-primary)" }}>
+              {equipment.length}
+            </p>
+          </div>
+          {(["critical", "warning", "normal"] as const).map((status) => (
+            <div
+              key={status}
+              className="rounded-lg border px-4 py-3"
+              style={{ borderColor: "var(--border)", background: "var(--surface-1)" }}
+            >
+              <p className="flex items-center gap-1.5 text-xs" style={{ color: "var(--text-muted)" }}>
+                <StatusIcon status={status} size={11} />
+                {STATUS_LABEL[status]}
+              </p>
+              <p
+                className="mt-0.5 text-xl font-semibold tabular-nums"
+                style={{ color: statusCounts[status] > 0 ? STATUS_VAR[status] : "var(--text-primary)" }}
+              >
+                {statusCounts[status]}
+              </p>
+            </div>
+          ))}
+        </div>
       </header>
 
       <div className="flex flex-1 gap-6 p-8">
@@ -113,30 +233,34 @@ export default function Home() {
                 setSelectedId(eq.id);
                 setInsightError(null);
               }}
-              className={`w-full rounded-lg border p-4 text-left transition-colors ${
-                eq.id === selectedId
-                  ? "border-zinc-900 bg-white dark:border-zinc-100 dark:bg-zinc-900"
-                  : "border-zinc-200 bg-white/60 hover:bg-white dark:border-zinc-800 dark:bg-zinc-900/40 dark:hover:bg-zinc-900"
-              }`}
+              className="w-full rounded-lg border-l-[3px] border-y border-r p-4 text-left transition-colors"
+              style={{
+                borderLeftColor: STATUS_VAR[eq.status],
+                borderTopColor: "var(--border)",
+                borderRightColor: "var(--border)",
+                borderBottomColor: "var(--border)",
+                background: eq.id === selectedId ? "var(--surface-1)" : "transparent",
+                boxShadow: eq.id === selectedId ? "0 1px 2px rgba(0,0,0,0.04)" : "none",
+              }}
             >
-              <div className="flex items-center justify-between">
-                <span className="font-medium text-zinc-900 dark:text-zinc-50">{eq.name}</span>
-                <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_STYLE[eq.status]}`}>
-                  {STATUS_LABEL[eq.status]}
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-medium" style={{ color: "var(--text-primary)" }}>
+                  {eq.name}
                 </span>
+                <StatusBadge status={eq.status} />
               </div>
-              <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+              <p className="mt-1 text-xs" style={{ color: "var(--text-secondary)" }}>
                 {eq.type} · {eq.location}
               </p>
               {eq.activeEventCount > 0 && (
-                <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+                <p className="mt-2 text-xs" style={{ color: "var(--text-muted)" }}>
                   최근 48시간 이상 이벤트 {eq.activeEventCount}건
                 </p>
               )}
             </button>
           ))}
           {equipment.length === 0 && (
-            <p className="text-sm text-zinc-500 dark:text-zinc-400">
+            <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
               설비 데이터가 없습니다. <code>npm run seed</code>로 시드 데이터를 생성하세요.
             </p>
           )}
@@ -145,43 +269,81 @@ export default function Home() {
         <main className="flex-1 space-y-6">
           {selected && (
             <>
-              <section className="rounded-lg border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-900">
-                <h2 className="mb-4 text-lg font-semibold text-zinc-900 dark:text-zinc-50">
+              <section
+                className="rounded-lg border p-6"
+                style={{ borderColor: "var(--border)", background: "var(--surface-1)" }}
+              >
+                <h2 className="mb-4 text-lg font-semibold" style={{ color: "var(--text-primary)" }}>
                   {selected.name} 센서 추이
                 </h2>
                 <div className="h-72 w-full">
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={chartData}>
-                      <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
-                      <XAxis dataKey="timestamp" tick={{ fontSize: 11 }} minTickGap={40} />
-                      <YAxis tick={{ fontSize: 11 }} />
-                      <Tooltip />
-                      <Legend />
-                      <Line type="monotone" dataKey="온도" stroke="#f97316" dot={false} strokeWidth={1.5} />
-                      <Line type="monotone" dataKey="진동" stroke="#3b82f6" dot={false} strokeWidth={1.5} />
+                      <CartesianGrid stroke="var(--gridline)" vertical={false} />
+                      <XAxis
+                        dataKey="timestamp"
+                        tick={{ fontSize: 11, fill: "var(--text-muted)" }}
+                        axisLine={{ stroke: "var(--axis)" }}
+                        tickLine={false}
+                        minTickGap={40}
+                      />
+                      <YAxis
+                        tick={{ fontSize: 11, fill: "var(--text-muted)" }}
+                        axisLine={false}
+                        tickLine={false}
+                      />
+                      <Tooltip content={<ChartTooltip />} cursor={{ stroke: "var(--axis)" }} />
+                      <Legend
+                        wrapperStyle={{ fontSize: 12, color: "var(--text-secondary)" }}
+                        iconType="plainline"
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="온도"
+                        stroke="var(--series-temperature)"
+                        dot={false}
+                        strokeWidth={2}
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="진동"
+                        stroke="var(--series-vibration)"
+                        dot={false}
+                        strokeWidth={2}
+                      />
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
               </section>
 
-              <section className="rounded-lg border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-900">
-                <h2 className="mb-4 text-lg font-semibold text-zinc-900 dark:text-zinc-50">
+              <section
+                className="rounded-lg border p-6"
+                style={{ borderColor: "var(--border)", background: "var(--surface-1)" }}
+              >
+                <h2 className="mb-4 text-lg font-semibold" style={{ color: "var(--text-primary)" }}>
                   이상 이벤트 ({events.length})
                 </h2>
                 {insightError && (
-                  <p className="mb-3 text-sm text-red-600 dark:text-red-400">{insightError}</p>
+                  <p className="mb-3 text-sm" style={{ color: "var(--status-critical)" }}>
+                    {insightError}
+                  </p>
                 )}
                 <div className="space-y-3">
                   {events.map((ev) => (
                     <div
                       key={ev.id}
-                      className={`rounded-lg border-l-4 bg-zinc-50 p-4 dark:bg-zinc-950/40 ${SEVERITY_STYLE[ev.severity]}`}
+                      className="rounded-lg border-l-[3px] p-4"
+                      style={{
+                        borderLeftColor: STATUS_VAR[ev.severity === "critical" ? "critical" : "warning"],
+                        background: "var(--page-plane)",
+                      }}
                     >
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="font-medium text-zinc-900 dark:text-zinc-50">
+                      <div className="flex items-center justify-between gap-3 text-sm">
+                        <span className="flex items-center gap-1.5 font-medium" style={{ color: "var(--text-primary)" }}>
+                          <StatusIcon status={ev.severity === "critical" ? "critical" : "warning"} size={13} />
                           {ev.metric === "temperature" ? "온도" : "진동"} 이상 · {formatTime(ev.timestamp)}
                         </span>
-                        <span className="text-zinc-500 dark:text-zinc-400">
+                        <span className="tabular-nums" style={{ color: "var(--text-muted)" }}>
                           측정값 {ev.value.toFixed(2)} (평균 {ev.baseline_mean.toFixed(2)} ±{" "}
                           {ev.baseline_std.toFixed(2)})
                         </span>
@@ -189,13 +351,15 @@ export default function Home() {
 
                       {ev.ai_explanation ? (
                         <div className="mt-3 space-y-1.5 text-sm">
-                          <p className="text-zinc-700 dark:text-zinc-300">{ev.ai_explanation}</p>
-                          <p className="text-zinc-700 dark:text-zinc-300">
-                            <span className="font-medium">권장 조치: </span>
+                          <p style={{ color: "var(--text-secondary)" }}>{ev.ai_explanation}</p>
+                          <p style={{ color: "var(--text-secondary)" }}>
+                            <span className="font-medium" style={{ color: "var(--text-primary)" }}>
+                              권장 조치:{" "}
+                            </span>
                             {ev.ai_recommendation}
                           </p>
                           {ev.estimated_savings_krw != null && (
-                            <p className="font-medium text-emerald-700 dark:text-emerald-400">
+                            <p className="font-medium tabular-nums" style={{ color: "var(--status-good)" }}>
                               예상 절감액: {formatKrw(ev.estimated_savings_krw)}원
                             </p>
                           )}
@@ -204,7 +368,8 @@ export default function Home() {
                         <button
                           onClick={() => handleGenerateInsight(ev.id)}
                           disabled={insightLoadingId === ev.id}
-                          className="mt-3 rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+                          className="mt-3 rounded-md px-3 py-1.5 text-xs font-medium transition-opacity disabled:opacity-50"
+                          style={{ background: "var(--text-primary)", color: "var(--surface-1)" }}
                         >
                           {insightLoadingId === ev.id ? "AI 분석 중..." : "AI 설명 생성"}
                         </button>
@@ -212,7 +377,7 @@ export default function Home() {
                     </div>
                   ))}
                   {events.length === 0 && (
-                    <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                    <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
                       해당 설비에 감지된 이상 이벤트가 없습니다.
                     </p>
                   )}

@@ -2,6 +2,7 @@ import { getDb } from "../lib/db";
 import { detectAnomalies } from "../lib/anomaly";
 import type { Metric } from "../lib/types";
 
+
 const EQUIPMENT = [
   { name: "1호기 압축기", type: "compressor", location: "A동 1층" },
   { name: "2호기 모터펌프", type: "pump", location: "A동 1층" },
