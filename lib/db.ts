@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
-import type { AnomalyEvent, Equipment, EquipmentSummary, Reading, Severity } from "./types";
+import type { AnomalyEvent, Equipment, EquipmentSummary, Metric, Reading, Severity } from "./types";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const DB_PATH = path.join(DATA_DIR, "app.db");
@@ -72,13 +72,63 @@ function initSchema(db: Database.Database) {
 const STATUS_WINDOW_HOURS = 48;
 const SEVERITY_RANK: Record<Severity, number> = { warning: 1, critical: 2 };
 
+export function getEquipmentIds(): number[] {
+  const db = getDb();
+  return (db.prepare("SELECT id FROM equipment").all() as { id: number }[]).map((r) => r.id);
+}
+
+export function getLatestReadingTimestamp(equipmentId: number): string | null {
+  const db = getDb();
+  return (
+    db
+      .prepare("SELECT MAX(timestamp) as ts FROM readings WHERE equipment_id = ?")
+      .get(equipmentId) as { ts: string | null }
+  ).ts;
+}
+
+export function insertReading(
+  equipmentId: number,
+  timestamp: string,
+  temperature: number,
+  vibration: number
+): void {
+  getDb()
+    .prepare(
+      "INSERT INTO readings (equipment_id, timestamp, temperature, vibration) VALUES (?, ?, ?, ?)"
+    )
+    .run(equipmentId, timestamp, temperature, vibration);
+}
+
+export function insertAnomalyEvent(event: {
+  equipmentId: number;
+  timestamp: string;
+  metric: Metric;
+  value: number;
+  baselineMean: number;
+  baselineStd: number;
+  severity: Severity;
+}): void {
+  getDb()
+    .prepare(
+      `INSERT INTO anomaly_events
+        (equipment_id, timestamp, metric, value, baseline_mean, baseline_std, severity)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      event.equipmentId,
+      event.timestamp,
+      event.metric,
+      event.value,
+      event.baselineMean,
+      event.baselineStd,
+      event.severity
+    );
+}
+
 export function getEquipmentSummaries(): EquipmentSummary[] {
   const db = getDb();
   const equipment = db.prepare("SELECT * FROM equipment ORDER BY id").all() as Equipment[];
 
-  const latestReadingStmt = db.prepare(
-    "SELECT MAX(timestamp) as ts FROM readings WHERE equipment_id = ?"
-  );
   const recentEventsStmt = db.prepare(
     `SELECT severity FROM anomaly_events
      WHERE equipment_id = ? AND timestamp >= ?`
@@ -89,7 +139,7 @@ export function getEquipmentSummaries(): EquipmentSummary[] {
   );
 
   return equipment.map((eq) => {
-    const latestReadingAt = (latestReadingStmt.get(eq.id) as { ts: string | null }).ts;
+    const latestReadingAt = getLatestReadingTimestamp(eq.id);
     const cutoff = latestReadingAt
       ? new Date(new Date(latestReadingAt).getTime() - STATUS_WINDOW_HOURS * 60 * 60 * 1000).toISOString()
       : "";

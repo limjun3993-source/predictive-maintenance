@@ -1,4 +1,4 @@
-import { getDb } from "../lib/db";
+import { getDb, insertAnomalyEvent, insertReading } from "../lib/db";
 import { detectAnomalies } from "../lib/anomaly";
 import type { Metric } from "../lib/types";
 
@@ -54,14 +54,6 @@ function seed() {
 
   const insertEquipment = db.prepare(
     "INSERT INTO equipment (name, type, location) VALUES (?, ?, ?)"
-  );
-  const insertReading = db.prepare(
-    "INSERT INTO readings (equipment_id, timestamp, temperature, vibration) VALUES (?, ?, ?, ?)"
-  );
-  const insertEvent = db.prepare(
-    `INSERT INTO anomaly_events
-      (equipment_id, timestamp, metric, value, baseline_mean, baseline_std, severity)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
   );
 
   const specsByEquipment: Record<string, { temperature: SeriesSpec; vibration: SeriesSpec }> = {
@@ -132,7 +124,7 @@ function seed() {
     const vibration = buildSeries(specs.vibration);
 
     for (let i = 0; i < HOURS; i++) {
-      insertReading.run(equipmentId, timestampFor(i), temperature[i], vibration[i]);
+      insertReading(equipmentId, timestampFor(i), temperature[i], vibration[i]);
     }
 
     for (const [metric, values] of [
@@ -141,15 +133,15 @@ function seed() {
     ] as [Metric, number[]][]) {
       const anomalies = detectAnomalies(values, metric, WINDOW);
       for (const a of anomalies) {
-        insertEvent.run(
+        insertAnomalyEvent({
           equipmentId,
-          timestampFor(a.index),
-          a.metric,
-          a.value,
-          a.baselineMean,
-          a.baselineStd,
-          a.severity
-        );
+          timestamp: timestampFor(a.index),
+          metric: a.metric,
+          value: a.value,
+          baselineMean: a.baselineMean,
+          baselineStd: a.baselineStd,
+          severity: a.severity,
+        });
       }
     }
 

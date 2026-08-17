@@ -1,4 +1,13 @@
-import { getDb } from "./db";
+import {
+  getDb,
+  getEquipmentIds,
+  getEquipmentSummaries,
+  getEventsForEquipment,
+  getLatestReadingTimestamp,
+  getReadingsForEquipment,
+  insertAnomalyEvent,
+  insertReading,
+} from "./db";
 import { baselineStats, classifySeverity } from "./anomaly";
 import type { Metric, Severity } from "./types";
 
@@ -32,8 +41,6 @@ const ANOMALY_CHANCE_PER_HOUR = 0.08;
 const ANOMALY_MAGNITUDE_MIN_SIGMA = 6;
 const ANOMALY_MAGNITUDE_MAX_SIGMA = 16;
 
-const METRICS: Metric[] = ["temperature", "vibration"];
-
 interface GeneratedPoint {
   value: number;
   severity: Severity | null;
@@ -41,19 +48,10 @@ interface GeneratedPoint {
   std: number;
 }
 
-function generateNextValue(
-  db: ReturnType<typeof getDb>,
-  equipmentId: number,
-  metric: Metric
-): GeneratedPoint | null {
-  const rows = db
-    .prepare(
-      `SELECT ${metric} as v FROM readings WHERE equipment_id = ? ORDER BY timestamp DESC LIMIT ?`
-    )
-    .all(equipmentId, WINDOW) as { v: number }[];
-  if (rows.length < WINDOW) return null; // not enough history yet — skip until seed has caught up
-
-  const window = rows.map((r) => r.v).reverse();
+/** Draws the next value from a trailing window (oldest-first) without
+ * touching the DB — the window is kept in memory and advanced by the
+ * caller across hours instead of re-querying it every iteration. */
+function generateNextValue(window: number[]): GeneratedPoint {
   const { mean, std } = baselineStats(window);
   const noiseStd = std > 0 ? std : Math.max(Math.abs(mean) * 0.02, 0.05);
 
@@ -73,18 +71,30 @@ function generateNextValue(
   return { value, severity, mean, std };
 }
 
+function getRecentValues(
+  db: ReturnType<typeof getDb>,
+  equipmentId: number,
+  metric: Metric
+): number[] {
+  const rows = db
+    .prepare(
+      `SELECT ${metric} as v FROM readings WHERE equipment_id = ? ORDER BY timestamp DESC LIMIT ?`
+    )
+    .all(equipmentId, WINDOW) as { v: number }[];
+  return rows.map((r) => r.v).reverse();
+}
+
 /** Appends however many simulated hourly readings have "arrived" since the
  * equipment's last real-time check-in, judging each new point against the
  * same rolling baseline the batch detector uses — the live-streaming
  * counterpart to scripts/seed.ts's one-shot historical batch. */
 export function catchUpEquipment(equipmentId: number): number {
   const db = getDb();
-  const latestReading = db
-    .prepare("SELECT MAX(timestamp) as ts FROM readings WHERE equipment_id = ?")
-    .get(equipmentId) as { ts: string | null };
-  if (!latestReading.ts) return 0; // no seed data yet for this equipment
+  const latestTs = getLatestReadingTimestamp(equipmentId);
+  if (!latestTs) return 0; // no seed data yet for this equipment
 
   const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
   const state = db
     .prepare("SELECT last_sim_at FROM sim_state WHERE equipment_id = ?")
     .get(equipmentId) as { last_sim_at: string } | undefined;
@@ -93,77 +103,90 @@ export function catchUpEquipment(equipmentId: number): number {
     // First time this equipment is seen by the simulator. Anchor the
     // real-time clock to now without generating a backlog — the seed
     // already brought the data timestamp up to "now" at seed time.
-    db.prepare(
-      "INSERT INTO sim_state (equipment_id, last_sim_at) VALUES (?, ?)"
-    ).run(equipmentId, new Date(nowMs).toISOString());
+    db.prepare("INSERT INTO sim_state (equipment_id, last_sim_at) VALUES (?, ?)").run(
+      equipmentId,
+      nowIso
+    );
     return 0;
   }
 
-  const lastSimMs = new Date(state.last_sim_at).getTime();
-  const realSecondsElapsed = (nowMs - lastSimMs) / 1000;
+  const realSecondsElapsed = (nowMs - new Date(state.last_sim_at).getTime()) / 1000;
   let simulatedHours = Math.floor(realSecondsElapsed * SIM_HOURS_PER_REAL_SECOND);
   if (simulatedHours <= 0) return 0;
   simulatedHours = Math.min(simulatedHours, MAX_CATCHUP_HOURS);
 
-  const lastDataMs = new Date(latestReading.ts).getTime();
-  const insertReading = db.prepare(
-    "INSERT INTO readings (equipment_id, timestamp, temperature, vibration) VALUES (?, ?, ?, ?)"
-  );
-  const insertEvent = db.prepare(
-    `INSERT INTO anomaly_events
-      (equipment_id, timestamp, metric, value, baseline_mean, baseline_std, severity)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
-  );
+  const windows: Record<Metric, number[]> = {
+    temperature: getRecentValues(db, equipmentId, "temperature"),
+    vibration: getRecentValues(db, equipmentId, "vibration"),
+  };
+  const touchSimState = () =>
+    db.prepare("UPDATE sim_state SET last_sim_at = ? WHERE equipment_id = ?").run(nowIso, equipmentId);
 
-  let newEvents = 0;
-
-  for (let h = 1; h <= simulatedHours; h++) {
-    const ts = new Date(lastDataMs + h * 60 * 60 * 1000).toISOString();
-    const points: Partial<Record<Metric, GeneratedPoint>> = {};
-
-    let missingHistory = false;
-    for (const metric of METRICS) {
-      const point = generateNextValue(db, equipmentId, metric);
-      if (!point) {
-        missingHistory = true;
-        break;
-      }
-      points[metric] = point;
-    }
-    if (missingHistory) break; // insufficient history — stop, don't skip a gap in time
-
-    insertReading.run(equipmentId, ts, points.temperature!.value, points.vibration!.value);
-
-    for (const metric of METRICS) {
-      const point = points[metric]!;
-      if (point.severity) {
-        insertEvent.run(
-          equipmentId,
-          ts,
-          metric,
-          point.value,
-          point.mean,
-          point.std,
-          point.severity
-        );
-        newEvents++;
-      }
-    }
+  if (windows.temperature.length < WINDOW || windows.vibration.length < WINDOW) {
+    // Not enough history to judge a new point against yet (shouldn't happen
+    // post-seed, but keep this from spinning on every request if it does).
+    touchSimState();
+    return 0;
   }
 
-  // Advance the real-time reference by exactly the real time that elapsed
-  // (now), never by the simulated amount — this is what keeps the two
-  // clocks from cross-contaminating on the next call.
-  db.prepare("UPDATE sim_state SET last_sim_at = ? WHERE equipment_id = ?").run(
-    new Date(nowMs).toISOString(),
-    equipmentId
-  );
+  const lastDataMs = new Date(latestTs).getTime();
+  let newEvents = 0;
+
+  const runCatchUp = db.transaction((hours: number) => {
+    for (let h = 1; h <= hours; h++) {
+      const ts = new Date(lastDataMs + h * 60 * 60 * 1000).toISOString();
+
+      const temp = generateNextValue(windows.temperature);
+      const vib = generateNextValue(windows.vibration);
+      insertReading(equipmentId, ts, temp.value, vib.value);
+      windows.temperature.push(temp.value);
+      windows.temperature.shift();
+      windows.vibration.push(vib.value);
+      windows.vibration.shift();
+
+      for (const [metric, point] of [
+        ["temperature", temp],
+        ["vibration", vib],
+      ] as [Metric, GeneratedPoint][]) {
+        if (point.severity) {
+          insertAnomalyEvent({
+            equipmentId,
+            timestamp: ts,
+            metric,
+            value: point.value,
+            baselineMean: point.mean,
+            baselineStd: point.std,
+            severity: point.severity,
+          });
+          newEvents++;
+        }
+      }
+    }
+  });
+  runCatchUp(simulatedHours);
+  touchSimState();
 
   return newEvents;
 }
 
-export function catchUpAllEquipment(): void {
-  const db = getDb();
-  const ids = db.prepare("SELECT id FROM equipment").all() as { id: number }[];
-  for (const { id } of ids) catchUpEquipment(id);
+function catchUpAllEquipment(): void {
+  for (const id of getEquipmentIds()) catchUpEquipment(id);
+}
+
+// Live-data facade: every read path goes through one of these three
+// functions rather than each route remembering to call catch-up before
+// querying, so freshness can't silently be skipped by a future call site.
+export function getLiveEquipmentSummaries() {
+  catchUpAllEquipment();
+  return getEquipmentSummaries();
+}
+
+export function getLiveReadings(equipmentId: number) {
+  catchUpEquipment(equipmentId);
+  return getReadingsForEquipment(equipmentId);
+}
+
+export function getLiveEvents(equipmentId: number) {
+  catchUpEquipment(equipmentId);
+  return getEventsForEquipment(equipmentId);
 }
