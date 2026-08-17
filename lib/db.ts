@@ -56,6 +56,16 @@ function initSchema(db: Database.Database) {
       explained_at TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_events_equipment ON anomaly_events(equipment_id, timestamp);
+
+    -- Tracks real wall-clock time separately from the readings' own
+    -- (compressed-rate) timestamps, so lib/simulate.ts can tell how much
+    -- real time actually passed since it last generated data. See the
+    -- comment in lib/simulate.ts for why these two clocks can't be the
+    -- same column.
+    CREATE TABLE IF NOT EXISTS sim_state (
+      equipment_id INTEGER PRIMARY KEY REFERENCES equipment(id),
+      last_sim_at TEXT NOT NULL
+    );
   `);
 }
 

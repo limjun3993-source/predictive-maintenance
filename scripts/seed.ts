@@ -38,7 +38,10 @@ function buildSeries(spec: SeriesSpec): number[] {
 }
 
 function timestampFor(hourIndex: number): string {
-  const start = Date.now() - HOURS * 60 * 60 * 1000;
+  // Last index (HOURS - 1) lands on "now" so the live catch-up generator
+  // (lib/simulate.ts) starts from a zero gap instead of bursting HOURS
+  // worth of readings the moment someone first loads the page post-seed.
+  const start = Date.now() - (HOURS - 1) * 60 * 60 * 1000;
   return new Date(start + hourIndex * 60 * 60 * 1000).toISOString();
 }
 

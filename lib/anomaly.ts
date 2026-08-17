@@ -22,8 +22,21 @@ export interface DetectedAnomaly {
 // signal, not noise — but it's weak. A single vibration z-score is not
 // precise enough to act on by itself; treat it as one input, not a
 // standalone trigger for dispatching maintenance.
-const WARNING_Z = 3;
-const CRITICAL_Z = 4;
+export const WARNING_Z = 3;
+export const CRITICAL_Z = 4;
+
+/** Shared with lib/simulate.ts so the live catch-up generator judges new
+ * points with the exact same threshold as the batch seed detector below. */
+export function classifySeverity(absZ: number): Severity | null {
+  if (absZ >= CRITICAL_Z) return "critical";
+  if (absZ >= WARNING_Z) return "warning";
+  return null;
+}
+
+export function baselineStats(window: number[]): { mean: number; std: number } {
+  const mean = average(window);
+  return { mean, std: stddev(window, mean) };
+}
 
 /**
  * Rolling-window z-score anomaly detection. The baseline for point i is
@@ -72,21 +85,18 @@ export function detectAnomalies(
 
   for (let i = windowSize; i < values.length; i++) {
     const window = values.slice(i - windowSize, i);
-    const mean = average(window);
-    const std = stddev(window, mean);
+    const { mean, std } = baselineStats(window);
     if (std === 0) continue;
 
-    const z = (values[i] - mean) / std;
-    const absZ = Math.abs(z);
-
-    if (absZ >= WARNING_Z) {
+    const severity = classifySeverity(Math.abs((values[i] - mean) / std));
+    if (severity) {
       anomalies.push({
         index: i,
         metric,
         value: values[i],
         baselineMean: mean,
         baselineStd: std,
-        severity: absZ >= CRITICAL_Z ? "critical" : "warning",
+        severity,
       });
     }
   }
